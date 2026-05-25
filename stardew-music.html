@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stardew Music Box</title>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Press+Start+2P&display=swap" rel="stylesheet" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    font-family: 'VT323', monospace;
+    -webkit-font-smoothing: none;
+    overflow: hidden;
+  }
+  .widget {
+    width: 100%; height: 100%;
+    min-height: 320px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 8px;
+  }
+  .frame {
+    position: relative;
+    width: 100%; max-width: 388px;
+    border: 4px solid #5a2f1a;
+    border-radius: 12px;
+    background: #3a2418;
+    box-shadow: 0 0 0 4px #8a5a32, 0 6px 0 4px #2a1a10;
+    overflow: hidden;
+  }
+  #scene {
+    display: block;
+    width: 100%;
+    height: 150px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    cursor: pointer;
+  }
+  /* the YouTube player is loaded but kept out of sight */
+  #yt-wrap {
+    position: absolute;
+    width: 1px; height: 1px;
+    left: -9999px; top: -9999px;
+    overflow: hidden;
+  }
+  .panel {
+    background: #c8a878;
+    border-top: 4px solid #8a5a32;
+    padding: 10px 14px 12px;
+    text-align: center;
+  }
+  .label {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 11px;
+    color: #5a2f1a;
+    letter-spacing: 1px;
+  }
+  .track {
+    font-size: 24px;
+    color: #3a2418;
+    margin-top: 6px;
+    background: #e8d4a8;
+    border: 2px solid #8a5a32;
+    border-radius: 4px;
+    padding: 3px 8px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .marquee { display: inline-block; padding-left: 100%; animation: scroll 12s linear infinite; }
+  @keyframes scroll { to { transform: translateX(-100%); } }
+  .controls {
+    display: flex; gap: 8px; justify-content: center;
+    margin-top: 9px;
+  }
+  .btn {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #e8d4a8;
+    background: #4a7a3a;
+    border: 2px solid #2f5226;
+    border-bottom-width: 4px;
+    border-radius: 5px;
+    padding: 7px 10px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    transition: transform .05s;
+  }
+  .btn:active { transform: translateY(2px); border-bottom-width: 2px; }
+  .btn.play { background: #3aa84a; border-color: #237a30; }
+  .btn.gear { background: #8a5a32; border-color: #5a3a1f; padding: 7px 9px; }
+  .editor {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 9px;
+  }
+  .editor.open { display: flex; }
+  .ehint {
+    font-size: 17px;
+    color: #5a2f1a;
+    text-align: left;
+  }
+  .editor input {
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    color: #3a2418;
+    background: #e8d4a8;
+    border: 2px solid #8a5a32;
+    border-radius: 4px;
+    padding: 4px 7px;
+    width: 100%;
+  }
+  .editor input::placeholder { color: #b09060; }
+  .erow { display: flex; gap: 6px; }
+  .erow .btn { flex: 1; justify-content: center; }
+  .btn.save { background: #4a7a3a; border-color: #2f5226; }
+</style>
+</head>
+<body>
+<div class="widget">
+  <div class="frame">
+    <canvas id="scene" width="180" height="75" title="Click to play / pause"></canvas>
+    <div id="yt-wrap"><div id="yt"></div></div>
+    <div class="panel">
+      <div class="label">MUSIC BOX</div>
+      <div class="track"><span class="marquee" id="track">Paste a YouTube link to begin</span></div>
+      <div class="controls">
+        <button class="btn play" id="play">&#9658; PLAY</button>
+        <button class="btn gear" id="gear" title="Edit" aria-label="Edit playlist">&#10003;</button>
+      </div>
+      <div class="editor" id="editor">
+        <div class="ehint">Paste a YouTube video or playlist link:</div>
+        <input id="linkIn" type="text" placeholder="https://youtube.com/watch?v=..." />
+        <input id="nameIn" type="text" placeholder="Track name (shown on the card)" />
+        <div class="erow">
+          <button class="btn save" id="save">LOAD</button>
+          <button class="btn gear" id="cancel">CANCEL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+(function () {
+  var cv = document.getElementById('scene');
+  var ctx = cv.getContext('2d');
+  var W = cv.width, H = cv.height;
+  var playing = false;        // animation + audio state
+  var player = null;          // YouTube player instance
+  var ready = false;          // API loaded
+  var loadedId = null;        // current video/playlist id
+
+  function px(x, y, w, h) { ctx.fillRect(Math.round(x), Math.round(y), w || 1, h || 1); }
+  function disc(cx, cy, r) {
+    cx = Math.round(cx); cy = Math.round(cy);
+    for (var yy = -r; yy <= r; yy++) {
+      var xw = Math.round(Math.sqrt(r * r - yy * yy));
+      ctx.fillRect(cx - xw, cy + yy, xw * 2 + 1, 1);
+    }
+  }
+  function lerp(a, b, t) {
+    var ai = parseInt(a.slice(1), 16), bi = parseInt(b.slice(1), 16);
+    var ar = (ai >> 16) & 255, ag = (ai >> 8) & 255, ab = ai & 255;
+    var br = (bi >> 16) & 255, bg = (bi >> 8) & 255, bb = bi & 255;
+    return 'rgb(' + Math.round(ar + (br - ar) * t) + ',' +
+                    Math.round(ag + (bg - ag) * t) + ',' +
+                    Math.round(ab + (bb - ab) * t) + ')';
+  }
+
+  var NOTES = [];
+  for (var i = 0; i < 6; i++) NOTES.push({ off: i * 0.7 });
+
+  function draw(t) {
+    // sky
+    for (var y = 0; y < H; y++) {
+      var ty = y / H;
+      ctx.fillStyle = ty < 0.6
+        ? lerp('#1d6fb0', '#7fc8df', ty / 0.6)
+        : lerp('#7fc8df', '#bfe6ee', (ty - 0.6) / 0.4);
+      ctx.fillRect(0, y, W, 1);
+    }
+    cloud(((t * 7) % (W + 70)) - 50, 12);
+    cloud(((t * 5 + 120) % (W + 70)) - 50, 26);
+
+    // hills
+    ctx.fillStyle = '#3f8a3a';
+    for (var hx = 0; hx < W; hx++)
+      ctx.fillRect(hx, 52 - 7 * Math.abs(Math.sin((hx + 20) / 26)), 1, H);
+    ctx.fillStyle = '#54aa48';
+    for (var hx2 = 0; hx2 < W; hx2++)
+      ctx.fillRect(hx2, 58 - 5 * Math.abs(Math.sin((hx2 + 60) / 18)), 1, H);
+
+    // cassette
+    var bob = playing ? Math.round(Math.sin(t * 4) * 2) : 0;
+    var cw = 64, ch = 38;
+    var cx0 = (W - cw) / 2, cy0 = 22 + bob;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(cx0 + 4, cy0 + ch + 4 - bob, cw - 8, 4);
+
+    ctx.fillStyle = '#3a2a52';
+    ctx.fillRect(cx0, cy0, cw, ch);
+    ctx.fillStyle = '#52407a';
+    ctx.fillRect(cx0, cy0, cw, 3);
+    ctx.fillStyle = '#241830';
+    ctx.fillRect(cx0, cy0 + ch - 3, cw, 3);
+    ctx.fillStyle = '#1a1024';
+    px(cx0, cy0, 2, ch); px(cx0 + cw - 2, cy0, 2, ch);
+
+    ctx.fillStyle = '#e8d4a8';
+    ctx.fillRect(cx0 + 6, cy0 + 5, cw - 12, 12);
+    ctx.fillStyle = '#c8a878';
+    ctx.fillRect(cx0 + 6, cy0 + 5, cw - 12, 2);
+    ctx.fillStyle = '#9a7a4a';
+    px(cx0 + 9, cy0 + 9, cw - 22, 1);
+    px(cx0 + 9, cy0 + 12, cw - 28, 1);
+
+    ctx.fillStyle = '#1a1024';
+    ctx.fillRect(cx0 + 8, cy0 + 20, cw - 16, 13);
+    var spin = playing ? t * 4 : 0;
+    drawReel(cx0 + 18, cy0 + 26, spin);
+    drawReel(cx0 + cw - 18, cy0 + 26, spin);
+    ctx.fillStyle = '#2a2018';
+    ctx.fillRect(cx0 + 18, cy0 + 22, cw - 36, 2);
+
+    // play triangle / pause bars hint on the cassette window
+    ctx.fillStyle = 'rgba(255,246,192,0.9)';
+    if (!playing) {
+      for (var pT = 0; pT < 5; pT++) px(cx0 + cw / 2 - 2, cy0 + 24 + pT, 1, 5 - Math.abs(pT - 2) * 2);
+    }
+
+    // floating notes
+    if (playing) {
+      ctx.fillStyle = '#fff6c0';
+      for (var n = 0; n < NOTES.length; n++) {
+        var phase = ((t * 0.5) + NOTES[n].off) % 3;
+        var ny = cy0 - phase * 14;
+        var nx = cx0 + 10 + n * 9 + Math.sin(phase * 3 + n) * 4;
+        if (phase < 2.6) {
+          ctx.globalAlpha = Math.max(0, 1 - phase / 2.6);
+          disc(nx, ny, 2);
+          px(nx + 2, ny - 6, 1, 6);
+          px(nx + 2, ny - 6, 3, 2);
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+
+    ctx.fillStyle = '#67c24e';
+    for (var g = 4; g < W; g += 15) {
+      px(g, 60 + (g % 4), 1, 3); px(g + 2, 62 + (g % 3), 1, 2);
+    }
+  }
+
+  function drawReel(cx, cy, ang) {
+    ctx.fillStyle = '#e8d4a8';
+    disc(cx, cy, 5);
+    ctx.fillStyle = '#9a7a4a';
+    disc(cx, cy, 2);
+    ctx.fillStyle = '#3a2a52';
+    for (var s = 0; s < 3; s++) {
+      var a = ang + s * (Math.PI * 2 / 3);
+      px(cx + Math.cos(a) * 4, cy + Math.sin(a) * 4, 1, 1);
+      px(cx + Math.cos(a) * 2, cy + Math.sin(a) * 2, 1, 1);
+    }
+  }
+  function cloud(x, y) {
+    x = Math.round(x);
+    ctx.fillStyle = '#eaf6fb';
+    ctx.fillRect(x + 4, y + 3, 18, 5);
+    ctx.fillRect(x, y + 6, 26, 4);
+    ctx.fillRect(x + 7, y, 11, 4);
+    ctx.fillStyle = '#cfe6ee';
+    ctx.fillRect(x, y + 9, 26, 1);
+  }
+
+  // ---- YouTube link parsing ----
+  // returns { videoId, listId } from common YouTube url shapes
+  function parseYT(url) {
+    var out = { videoId: null, listId: null };
+    try {
+      var u = new URL(url.indexOf('http') === 0 ? url : 'https://' + url);
+      out.listId = u.searchParams.get('list');
+      if (u.searchParams.get('v')) out.videoId = u.searchParams.get('v');
+      else if (u.hostname.indexOf('youtu.be') > -1) out.videoId = u.pathname.slice(1);
+      else if (u.pathname.indexOf('/embed/') === 0) out.videoId = u.pathname.split('/embed/')[1];
+      else if (u.pathname.indexOf('/shorts/') === 0) out.videoId = u.pathname.split('/shorts/')[1];
+    } catch (e) {}
+    return out;
+  }
+
+  // ---- YouTube IFrame API ----
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player('yt', {
+      height: '1', width: '1',
+      playerVars: { playsinline: 1 },
+      events: {
+        onReady: function () { ready = true; },
+        onStateChange: function (e) {
+          // 1 = playing, 2 = paused, 0 = ended
+          playing = (e.data === YT.PlayerState.PLAYING);
+          syncPlayBtn();
+        }
+      }
+    });
+  };
+
+  function syncPlayBtn() {
+    var b = document.getElementById('play');
+    b.innerHTML = playing ? '&#10074;&#10074; PAUSE' : '&#9658; PLAY';
+  }
+
+  function togglePlay() {
+    if (!ready || !player) return;
+    if (!loadedId) { openEditor(); return; }   // nothing loaded yet
+    if (playing) player.pauseVideo();
+    else player.playVideo();
+  }
+
+  // ---- controls ----
+  document.getElementById('play').addEventListener('click', togglePlay);
+  cv.addEventListener('click', togglePlay);   // clicking the cassette also toggles
+
+  var editor = document.getElementById('editor');
+  var linkIn = document.getElementById('linkIn');
+  var nameIn = document.getElementById('nameIn');
+  var trackEl = document.getElementById('track');
+
+  function openEditor() {
+    editor.classList.add('open');
+    linkIn.focus();
+  }
+  document.getElementById('gear').addEventListener('click', function () {
+    editor.classList.toggle('open');
+    if (editor.classList.contains('open')) linkIn.focus();
+  });
+  document.getElementById('cancel').addEventListener('click', function () {
+    editor.classList.remove('open');
+  });
+  document.getElementById('save').addEventListener('click', function () {
+    var p = parseYT(linkIn.value.trim());
+    var name = nameIn.value.trim();
+    if (!ready || !player) { trackEl.textContent = 'Player still loading...'; return; }
+    if (p.listId) {
+      player.loadPlaylist({ list: p.listId, listType: 'playlist' });
+      loadedId = p.listId;
+    } else if (p.videoId) {
+      player.loadVideoById(p.videoId);
+      loadedId = p.videoId;
+    } else {
+      trackEl.textContent = 'Hmm, that link did not work';
+      return;
+    }
+    trackEl.textContent = name || 'Now playing';
+    editor.classList.remove('open');
+  });
+  [linkIn, nameIn].forEach(function (el) {
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') document.getElementById('save').click();
+    });
+  });
+
+  function loop() {
+    draw((Date.now() / 1000) % 100000);
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
